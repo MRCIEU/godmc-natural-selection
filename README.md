@@ -22,4 +22,4 @@ Project folder (https://ieuportal.epi.bris.ac.uk/project_detail/627d97b1-d9d8-41
 5. Flip signs on S to be intuitive (-S = negative selection) 
 6. Create figure 1 from red/blue/black with confidence intervals around slope (Dan) 
 7. Add GERP score to Figure 1 and Sfig1 (Josine) 
-8. Estimate the enrichment of high SDS/Fst SNPs in complex traits - are they more likely to be disease traits - use file here on bc3: /newshared/godmc/1kg_reference_ph3/mQTLSNP_selection_se_tfbs.Robj.  (Gib) 
+8. Josine to send Gib the cross-tissue effect estimates. Gib to estimate heterogeneity between tissues per mQTL. Josine to regression heterogeneity against selection scores
