@@ -1,2 +1,3 @@
-# godmc-natural-selection
-Natural selection analysis in GoDMC
+# Analysis of natural selection on DNAm using GoDMC
+
+Work in progress
