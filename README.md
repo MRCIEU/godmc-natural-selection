@@ -8,6 +8,8 @@ Project folder (https://ieuportal.epi.bris.ac.uk/project_detail/627d97b1-d9d8-41
 /projects/MRC-IEU/research/projects/ieu2/p5/091 
 ```
 
+Paper: https://outlook.office.com/mail/group/groups.bristol.ac.uk/grp-godmc-natural_selection/files
+
 
 ## Todo
 
