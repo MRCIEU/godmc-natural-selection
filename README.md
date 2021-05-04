@@ -25,3 +25,9 @@ Paper: https://outlook.office.com/mail/group/groups.bristol.ac.uk/grp-godmc-natu
 6. Create figure 1 from red/blue/black with confidence intervals around slope (Dan) 
 7. Add GERP score to Figure 1 and Sfig1 (Josine) 
 8. Josine to send Gib the cross-tissue effect estimates. Gib to estimate heterogeneity between tissues per mQTL. Josine to regression heterogeneity against selection scores
+9. Compare enrichments for selection scores for  
+-40k DNAm-trait pairs
+-5.5k eQTL trait pairs
+-3000 mQTL-eQTL trait pairs
+-non colocalizing mQTL
+-non-localizing eQTL
