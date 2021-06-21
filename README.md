@@ -25,6 +25,9 @@ Github repo for method: https://github.com/danjlawson/robustarchitecture
 -non colocalizing mQTL
 -non-localizing eQTL
 
+Data can be found here:
+/projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/godmc_eqtlgen
+
 ## Done
 
 1. Do separate slopes for SNPs overlapping TFBS vs no overlap (Josine) (DONE)
