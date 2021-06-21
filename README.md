@@ -18,11 +18,16 @@ Github repo for method: https://github.com/danjlawson/robustarchitecture
 1. Move analysis scripts to https://github.com/MRCIEU/godmc-natural-selection and data to project folder - https://ieuportal.epi.bris.ac.uk/project_detail/627d97b1-d9d8-417a-ae28-832e866ecc6c/
 7. Add GERP score to Figure 1 and Sfig1 (Josine) 
 8. Josine to send Gib the cross-tissue effect estimates. Gib to estimate heterogeneity between tissues per mQTL. Josine to regression heterogeneity against selection scores
-9. Compare enrichments for selection scores for  
+9. Compare enrichments for selection scores for:
+
 -40k DNAm-trait pairs
+
 -5.5k eQTL trait pairs
+
 -3000 mQTL-eQTL trait pairs
+
 -non colocalizing mQTL
+
 -non-localizing eQTL
 
 Data can be found here:
