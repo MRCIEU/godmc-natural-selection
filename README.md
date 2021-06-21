@@ -26,7 +26,9 @@ Github repo for method: https://github.com/danjlawson/robustarchitecture
 -non-localizing eQTL
 
 Data can be found here:
+```
 /projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/godmc_eqtlgen
+```
 
 ## Done
 
