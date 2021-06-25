@@ -1,0 +1,55 @@
+---
+title: "Heterogeneity of mQTL effects between tissues"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+load("heterogeneity.rdata")
+str(out)
+```
+
+  
+```{r}
+-log10(0.05)
+hist(pmin(-log10(p.adjust(out$Qpval, "fdr")), 10), breaks=100)
+```
+
+
+Sometimes there are multiple SNPs for a CpG. Count how many heterogeneity Q stats are significant (FDR < 0.05) per CpG
+
+```{r}
+outcpg <- out %>% 
+  mutate(fdr=p.adjust(Qpval, "fdr")) %>%
+  filter(!is.na(fdr)) %>%
+  group_by(cpg) %>%
+  summarise(
+    n=n(), 
+    nsig=sum(fdr < 0.05),
+    min=min(fdr),
+    max=max(fdr)
+  )
+str(outcpg)
+```
+
+```{r}
+subset(outcpg, n != 1) %>%
+  {hist(pmin(-log10(.$min) - -log10(.$max), 10), breaks=100)}
+```
+
+```{r}
+subset(outcpg, n != 1) %>%
+  {hist(.$nsig / .$n)}
+```
+
+Create a relatively lenient variable for tissue specificity where a CPG is cell-specific if any SNP has significant heterogeneity
+
+```{r}
+outcpg$specific <- outcpg$nsig >= 1
+table(outcpg$specific)
+```
+
+```{r}
+save(outcpg, file="outcpg.rdata")
+```
+
