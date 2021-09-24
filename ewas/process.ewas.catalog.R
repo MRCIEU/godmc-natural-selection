@@ -784,4 +784,3 @@ length(which(!is.na(tfbs2$ewas_pheno_category_uniq)))
 save(tfbs2,file="/projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/tfbs/tfbsbycpg_summarised.Robj")
 nrow(tfbs2)
 
-###
