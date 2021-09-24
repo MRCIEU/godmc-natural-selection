@@ -4,6 +4,7 @@ library(dplyr)
 library(gridExtra)
 library(grid)
 library(GenomicRanges)
+library(readr)
 
 #ov.all<-data.frame()
 #for (i in 1:23){
@@ -30,9 +31,39 @@ library(GenomicRanges)
 
 #tfbs<-data.frame(cpg=ov.all$cpg,tfbs=rs)
 
-load("../results/enrichments/snpcontrolsets_selection_se.rdata")
+load("~/repo/godmc_phase2_analysis/results/enrichments/snpcontrolsets_selection_se.rdata")
 f.all<-data.table(f.all)
+f.all$snpchr<-gsub("chrX","chr23",f.all$snpchr)
+temp<-data.frame()
+
+for (chr in 1:23) {
+snp_cis<-read_tsv(paste0("/panfs/panasas01/shared-godmc/godmc_phase2_analysis/results/16/snpcpgpval.chr",chr,".cistrans3.txt.gz"))
+snp_cis<-data.frame(snp_cis)
+snpchr<-paste0("chr",chr)
+cat(snpchr,"\t")
+w<-which(f.all$snpchr==snpchr)
+f.all.chr<-f.all[w,]
+m<-match(f.all.chr$snp_tested,snp_cis$snp)
+f.all.chr<-data.frame(f.all.chr,id=snp_cis$id[m],cpg=snp_cis$cpg[m])
+temp<-rbind(temp,f.all.chr)
+write.csv(f.all.chr,file=paste0(snpchr,".csv"),col.names=F,quote=F)
+}
+
+table(f.all$snpchr)
+table(temp$snpchr)
+#write.csv(t(names(f.all.chr)),"header.csv",quote=F)
+
+#cat header.csv > allchrs.csv
+#cat chr*.csv >> allchrs.csv
+f.all<-temp
 f.all$snpchr<-gsub("chr23","chrX",f.all$snpchr)
+
+rm(temp,f.all.chr,snp_cis)
+#f.all<-read_csv("allchrs.csv")
+
+save(f.all,file="~/repo/godmc_phase2_analysis/results/enrichments/snpcontrolsets_selection_se.rdata")
+##
+
 gr_snp = with(f.all,GRanges(seqnames=snpchr,ranges=IRanges(min,max),strand=Rle("+")))
 
 path="/panfs/panasas01/shared-godmc/GARFIELDv2/garfield-data/encode_tfbs"
@@ -87,8 +118,6 @@ tfbs$any_ctcf<-tfbs.ctcf
 
 
 save(tfbs,file="tfbsbysnp.Robj")
-
-
 
 m<-match(f.all$SNP,tfbs$SNP)
 f.all<-data.frame(f.all,any_ctcf=tfbs$any_ctcf[m],any_tfbs=tfbs$any_tfbs[m])

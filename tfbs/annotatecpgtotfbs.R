@@ -33,5 +33,19 @@ tfbs2$tfbs<-0
 tfbs2$tfbs[w]<-"tfbs"
 tfbs2$tfbs[-w]<-"no tfbs"
 
-save(tfbs2,file="tfbsbycpg_summarised.Robj")
+cpgs<-data.frame(unique(ov.all[,1:4]))
+nrow(cpgs)
+
+m<-match(cpgs$cpg,tfbs2$cpg)
+tfbs2<-data.frame(cpgs,tfbs2[m,])
+
+save(tfbs2,file="/projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/tfbs/tfbsbycpg_summarised.Robj")
+
+load("/projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/tfbs/tfbsbycpg_summarised.Robj")
+load("~/repo/godmc-natural-selection/tissue/outcpg.rdata")
+names(outcpg)<-c("cpg","tiss_nsnps","tiss_nsnp_sig","tiss_min_fdr","tis_max_fdr","tiss_specific")
+m<-match(tfbs2$cpg,outcpg$cpg)
+tfbs2<-data.frame(tfbs2,outcpg[m,])
+
+save(tfbs2,file="/projects/MRC-IEU/research/projects/ieu2/p5/091/working/data/tfbs/tfbsbycpg_summarised.Robj")
 
