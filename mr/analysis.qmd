@@ -11,8 +11,10 @@ library(ggplot2)
 library(httr)
 library(tidyr)
 library(ieugwasr)
-library(arrow)
+#library(arrow)
 library(here)
+library(parallel)
+library(coloc)
 ```
 
 1. Gather and organise data
@@ -42,12 +44,19 @@ clumped <- ungroup(clumped)
 Pull in rsids
 
 ```{r}
-clumped <- read_parquet("snp_1kg.parquet", as_data_frame=FALSE) %>%
-  filter(code %in% clumped$snp) %>%
-  select(code, rsid) %>%
-  collect() %>%
-  left_join(clumped, ., by=c("snp"="code"))
-clumped
+# clumped <- read_parquet("snp_1kg.parquet", as_data_frame=FALSE) %>%
+#   filter(code %in% clumped$snp) %>%
+#   select(code, rsid) %>%
+#   collect() %>%
+#   left_join(clumped, ., by=c("snp"="code"))
+# clumped
+load("data/snp_1kg.rdata")
+str(snp_1kg)
+m <- match(clumped$snp, snp_1kg$snp)
+clumped$rsid <- NA
+table(clumped$snp == snp_1kg$snp[m])
+clumped$rsid[!is.na(m)] <- na.exclude(snp_1kg$V2[m])
+
 ```
 
 
@@ -87,19 +96,33 @@ Extract mQTL variants from number of children GWASs
 ```{r}
 outcome_dat <- extract_outcome_data(unique(exposure_dat$SNP), c("ieu-b-4760"))
 str(outcome_dat)
+save(outcome_dat, exposure_dat, file="data/expout.rdata")
 ```
 
 Harmonise exposure and outcome data
 
 ```{r}
-dat <- harmonise_data(exposure_dat, outcome_dat, action=1) %>% suppressMessages()
+temp <- inner_join(exposure_dat, outcome_dat, by="SNP")
+dim(temp)
+table(table(paste(temp$id.exposure, temp$id.outcome)))
+table(temp$effect_allele.exposure == temp$effect_allele.outcome)
+toflip <- temp$effect_allele.exposure != temp$effect_allele.outcome
+table(toflip)
+t2 <- temp$other_allele.outcome[toflip]
+temp$other_allele.outcome[toflip] <- temp$effect_allele.outcome[toflip]
+temp$effect_allele.outcome[toflip] <- t2
+table(temp$effect_allele.exposure == temp$effect_allele.outcome)
+temp <- subset(temp, effect_allele.exposure == effect_allele.outcome)
+dim(temp)
+dat <- temp
+dat$mr_keep <- TRUE
 ```
 
 ## 2. Perform basic MR analysis of each DNAm site on FEV1
 
 ```{r}
 res <- mr(dat, method_list=c("mr_ivw", "mr_wald_ratio")) %>% suppressMessages
-save(res, dat, ewas_result, file="results/mr_output.rdata")
+save(res, file="results/mr_output.rdata")
 ```
 
 Quick look at the MR results:
@@ -109,15 +132,16 @@ res <- inner_join(
   res, 
   clumped %>% select(cpg, cpgchr, cpgpos) %>% filter(!duplicated(cpg)), by=c("exposure"="cpg")) %>% 
   mutate(cpgchr = as.numeric(gsub("chr", "", cpgchr)), fdr=p.adjust(pval, "fdr"))
+res <- subset(res, !is.na(res$pval))
 ```
 
 ```{r}
-ggplot(res %>% filter(method %in% c("Inverse variance weighted", "Wald ratio")), aes(x=cpgpos, y=b)) +
+p1 <- ggplot(res %>% filter(method %in% c("Inverse variance weighted", "Wald ratio")), aes(x=cpgpos, y=b)) +
   geom_point(aes(colour=fdr < 0.05, shape=method)) +
   facet_grid(. ~ cpgchr, scale="free_x", space="free_x") +
   theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), legend.position="bottom") +
   labs(x="DNAm site location", y="MR estimate")
-ggsave("images/fig_mr_miami.pdf", width=10, height=5)
+ggsave(p1, file = "images/fig_mr_miami.png", width=10, height=5)
 ```
 
 There are some associations here that are stronger than expected by chance e.g. what fraction of the MR results have an FDR < 0.05? (5% of these are expected to be false positives). And what fraction of MR results have a p-value < 0.05? (expect 0.05 under the null hypothesis of no associations)
@@ -142,19 +166,6 @@ mqtl_snps <- unique(clumped$rsid) %>% na.exclude()
 length(mqtl_snps)
 ```
 
-Extract all mQTLs from FEV1
-
-```{r}
-mqtl_outcome <- extract_outcome_data(mqtl_snps, c("ebi-a-GCST007432", "ebi-a-GCST007431", "ebi-a-GCST007429"), proxies=FALSE)
-mqtl_outcome <- mqtl_outcome%>%
-  mutate(outcome = case_when(
-    id.outcome == "ebi-a-GCST007432" ~ "FEV1",
-    id.outcome == "ebi-a-GCST007431" ~ "FEV1/FVC",
-    id.outcome == "ebi-a-GCST007429" ~ "FVC",
-    TRUE ~ NA_character_
-  ))
-```
-
 What fraction of all GoDMC mQTLs associate with FEV1?
 
 ```{r}
@@ -175,83 +186,6 @@ Obtain allele frequency and LD score info for the mQTLs
 afl2 <- afl2_rsid(mqtl_snps)
 ```
 
-Perform the analysis of
-
-$$
-FEV1_{GWAS} \sim mQTL_{EWAS} + LDscore + Var(SNP)
-$$
-
-i.e. if we denote an $mQTL_{EWAS}$ to be for `DNAm sites associated with FEV1 in EWAS` vs `all other DNAm sites`, then does that predict lower GWAS p-values for FEV1?
-
-```{r}
-afl2$fev1 <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FEV1")$SNP)
-afl2$fvc <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FVC")$SNP)
-afl2$fev1fvc <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FEV1/FVC")$SNP)
-table(afl2$fev1)
-table(afl2$fvc)
-table(afl2$fev1fvc)
-```
-```{r}
-mqtl_outcome$fval <- mqtl_outcome$beta.outcome^2 / mqtl_outcome$se.outcome^2
-enr_dat <- inner_join(
-  afl2,
-  mqtl_outcome %>% filter(outcome=="FEV1") %>% select(rsid=SNP, fval_fev1=fval),
-  by="rsid"
-)
-enr_dat <- inner_join(
-  enr_dat,
-  mqtl_outcome %>% filter(outcome=="FVC") %>% select(rsid=SNP, fval_fvc=fval),
-  by="rsid"
-)
-enr_dat <- inner_join(
-  enr_dat,
-  mqtl_outcome %>% filter(outcome=="FEV1/FVC") %>% select(rsid=SNP, fval_fev1fvc=fval),
-  by="rsid"
-)
-enr_dat$snpvar <- (1-enr_dat$AF.EUR) * enr_dat$AF.EUR
-str(enr_dat)
-```
-
-
-
-```{r}
-params <- expand.grid(
-  outcome=c("fev1", "fvc", "fev1fvc"),
-  incl6=c(TRUE,FALSE),
-  b=NA,
-  se=NA,
-  pval=NA
-)
-enr_dat_no6 <- subset(enr_dat, chrom != 6)
-model_res <- lapply(1:nrow(params), function(i)
-{
-  eq <- as.formula(paste0("fval_", params$outcome[i], " ~ ", params$outcome[i], " + L2.EUR + snpvar"))
-  if(params$incl6[i])
-  {
-    mod <- summary(lm(eq, data=enr_dat))$coef
-    newas <- sum(enr_dat[[params$outcome[i]]])
-    ntot <- nrow(enr_dat)
-  } else {
-    mod <- summary(lm(eq, data=enr_dat_no6))$coef  
-    newas <- sum(enr_dat_no6[[params$outcome[i]]])
-    ntot <- nrow(enr_dat_no6)
-  }
-  tibble(outcome=params$outcome[i], incl6=params$incl6[i], `EWAS mQTLs`=newas, `Total mQTLs`=ntot, b=mod[2,1], se=mod[2,2], pval=mod[2,4])
-}) %>% bind_rows()
-model_res
-```
-
-This indicates that mQTLs for FEV1 EWAS hits associate more strongly than all other mQTLs - i.e. the EWAS is picking up DNAm sites that capture some sort of FEV1 regulatory function.
-
-Also try binarising the FEV1 GWAS test statistic (i.e. is the test statistic for FEV1 GWAS p < 0.05)
-
-```{r}
-enr_dat$sig <- enr_dat$fval_fev1 > qf(0.05, 1, 300000, low=F)
-model2 <- summary(glm(sig ~ fev1 + L2.EUR + snpvar, enr_dat %>% filter(chrom != 6), family="binomial"))
-model2
-```
-
-Similar result - an mQTL for an FEV1 associated CpG is `r model2$coef[2,1] %>% exp() %>% round(., 2)` times more likely to associate with FEV1 than any other mQTL.
 
 ## 4. Test if MR analyses support causal influence of DNAm on lung function
 
@@ -272,7 +206,9 @@ Under the vertical pleiotropy model, we would expect that the effect estimates o
 We will formulate the analysis by hypothesising that the IVW association for `DNAm -> FEV1` is substantially stronger when combined across all instruments, than if we use any one instrument alone
 
 ```{r, message=FALSE}
-res2 <- mr_singlesnp(dat, all_method="mr_ivw")
+outcome_dat$fdr <- p.adjust(outcome_dat$pval.outcome, "fdr")
+sigsnp <- subset(outcome_dat, fdr < 0.05)$SNP
+res2 <- mr_singlesnp(subset(dat, SNP %in% sigsnp), all_method="mr_ivw")
 
 mcpg <- filter(res2, grepl("All", SNP))$exposure %>% unique
 
@@ -294,6 +230,8 @@ comparison <- res2 %>%
 str(comparison)
 table(comparison$minpval > comparison$ivwpval, comparison$outcome)
 comparison[comparison$minpval > comparison$ivwpval, ]
+
+subset(dat, exposure == "cg12609785")
 ```
 ```{r}
 group_by(comparison, outcome) %>%
@@ -367,7 +305,7 @@ tocoloc <- res2 %>%
   filter(!grepl("All", SNP)) %>%
   mutate(fdr = p.adjust(p, "fdr")) %>%
   filter(fdr < 0.05)
-save(tocoloc, file="tocoloc.rdata")
+save(tocoloc, file="data/tocoloc.rdata")
 ```
 
 Obtain regional mQTL genetic effects from GoDMC API
@@ -375,6 +313,7 @@ Obtain regional mQTL genetic effects from GoDMC API
 ```{r}
 o <- lapply(unique(tocoloc$exposure), function(cpg)
   {
+    message(cpg)
     o <- POST("http://api.godmc.org.uk/v0.1/query", body = list(cpgs=cpg), encode = "json")
     content(o) %>% lapply(., as_tibble) %>% bind_rows
   })
@@ -390,13 +329,15 @@ cpgregions <- o %>% bind_rows() %>%
     snppos=as.numeric(snppos)
   )
 str(cpgregions)
+save(cpgregions, file="data/cpgregions.rdata")
 ```
 
 Perform colocalisation for each DNAm-SNP set that associated with FEV1 GWAS
 
 ```{r, message=FALSE, echo=FALSE}
-colocres <- lapply(1:nrow(tocoloc), function(i)
+colocres <- mclapply(1:nrow(tocoloc), function(i)
 {
+  message(i)
   CPG <- tocoloc$exposure[i]
   RSID <- tocoloc$SNP[i]
   a <- subset(cpgregions, cpg == CPG)
@@ -416,7 +357,7 @@ colocres <- lapply(1:nrow(tocoloc), function(i)
     return(NULL)
   }
   d1 <- list(beta=colocdat$beta.exposure, varbeta=colocdat$se.exposure^2, type="quant", N=colocdat$samplesize.exposure, sdY=1, snp=colocdat$SNP, pvalues=colocdat$pval.exposure)
-  d2 <- list(beta=colocdat$beta.outcome, varbeta=colocdat$se.outcome^2, type="quant", N=colocdat$samplesize.outcome, sdY=1, snp=colocdat$SNP, pvalues=colocdat$pval.outcome)
+  d2 <- list(beta=colocdat$beta.outcome, varbeta=colocdat$se.outcome^2, type="quant", N=420000, sdY=1, snp=colocdat$SNP, pvalues=colocdat$pval.outcome)
   maf <- colocdat$eaf.exposure
   maf[maf > 0.5] <- 1 - maf[maf > 0.5]
   sink("/dev/null")
@@ -424,16 +365,16 @@ colocres <- lapply(1:nrow(tocoloc), function(i)
   sink()
   x <- tibble(rsid=RSID, cpg=CPG, chr=CHR, pos=POS, outcome=tocoloc$outcome[i], h4=cr$summary['PP.H4.abf'])
   return(x)
-}) %>% bind_rows()
+}, mc.cores=32) %>% bind_rows()
 ```
 
 Distribution of P(H4)
 
 ```{r}
-ggplot(colocres, aes(x=h4)) + geom_histogram() +
-  facet_grid(. ~ outcome) +
-  labs(x="Coloc P(H4)")
-ggsave("fig_coloc.pdf")
+p2 <- ggplot(colocres, aes(x=h4)) + 
+  geom_histogram() +
+  labs(x="Coloc P(H4)") 
+ggsave(p2, file="images/fig_coloc.pdf")
 ```
 
 How many colocalise at p(h4) > 0.8?
@@ -456,7 +397,7 @@ colocres %>%
 ```
 
 ```{r}
-save(colocres, file="colocres.rdata")
+save(colocres, file="results/colocres.rdata")
 ```
 
 ## Bringing it together
@@ -489,15 +430,15 @@ mr_coloc_ss <- mr_singlesnp(dat_coloc %>% filter(paste(exposure, outcome) %in% p
 mr_coloc_ss <- left_join(mr_coloc_ss, colocres, by=c("SNP"="rsid", "exposure"="cpg", "outcome")) %>%
   mutate(coloc_sig = h4 >= 0.8)
 
-ggplot(subset(mr_coloc_ss), aes(x=b, y=SNP)) +
+p3 <- ggplot(subset(mr_coloc_ss), aes(x=b, y=SNP)) +
   geom_vline(xintercept=0, linetype="dotted") +
   geom_point(aes(colour=grepl("All", SNP))) +
   geom_point(data=subset(mr_coloc_ss, coloc_sig), colour="black", size=2) +
   geom_errorbarh(aes(xmin=b-1.96*se, xmax=b+1.96*se, colour=grepl("All", SNP)), height=0) +
-  facet_grid(paste(outcome, " ~ ", exposure) ~ ., scale="free_y", space="free_y") +
+  facet_grid(exposure ~ ., scale="free_y", space="free_y") +
   labs(y=NULL, x="MR estimate") +
   theme(legend.position="none", strip.text.y=element_text(angle=0))
-ggsave("fig_coloc_mr.pdf", height=8, width=7)
+ggsave(p3, file="images/fig_coloc_mr.pdf", height=30, width=7)
 ```
 
 ## Tables
@@ -505,13 +446,13 @@ ggsave("fig_coloc_mr.pdf", height=8, width=7)
 MR and coloc results
 
 ```{r}
-write.csv(colocmrres, "tab_colocmrres.csv")
+write.csv(colocmrres, "results/tab_colocmrres.csv")
 ```
 
 mQTL enrichment results
 
 ```{r}
-write.csv(model_res, "tab_mqtl_enrichment.csv")
+write.csv(model_res, "results/tab_mqtl_enrichment.csv")
 ```
 
 Multiple instrument MR and heterogeneity
@@ -520,7 +461,7 @@ Multiple instrument MR and heterogeneity
 inner_join(res, het_coloc, by=c("exposure", "outcome")) %>%
   select(exposure, outcome, nsnp, b, se, pval, Q, Q_pval) %>%
   arrange(outcome) %>%
-  write.csv(., "tab_mr_het.csv")
+  write.csv(., "results/tab_mr_het.csv")
 ```
 
 

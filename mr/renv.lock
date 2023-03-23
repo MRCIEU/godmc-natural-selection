@@ -1,6 +1,6 @@
 {
   "R": {
-    "Version": "4.2.3",
+    "Version": "4.2.2",
     "Repositories": [
       {
         "Name": "CRAN",
@@ -55,14 +55,14 @@
       "Package": "TwoSampleMR",
       "Version": "0.5.6",
       "Source": "GitHub",
-      "Remotes": "gqi/MRMix, mrcieu/ieugwasr, mrcieu/MRInstruments,\n        MRPRESSO=rondolab/MR-PRESSO, WSpiller/RadialMR",
       "RemoteType": "github",
+      "Remotes": "gqi/MRMix, mrcieu/ieugwasr, mrcieu/MRInstruments,\n    MRPRESSO=rondolab/MR-PRESSO, WSpiller/RadialMR",
       "RemoteHost": "api.github.com",
       "RemoteRepo": "twosamplemr",
       "RemoteUsername": "mrcieu",
       "RemoteRef": "description-update",
       "RemoteSha": "232cc64f221bdb1f6a532387787b4a803ccfaba2",
-      "Hash": "7a307509257de086ba6b16501334e456",
+      "Hash": "e5bf2539fd4eddbe2d79d01f742b3421",
       "Requirements": [
         "MASS",
         "data.table",
