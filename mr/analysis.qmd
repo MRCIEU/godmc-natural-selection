@@ -1,0 +1,527 @@
+---
+title: "MR of DNAm on number of children"
+output: html_notebook
+---
+
+```{r}
+library(readxl)
+library(TwoSampleMR)
+library(dplyr)
+library(ggplot2)
+library(httr)
+library(tidyr)
+library(ieugwasr)
+library(arrow)
+library(here)
+```
+
+1. Gather and organise data
+2. Perform basic MR analysis of each DNAm site on FEV1
+3. Test if FEV1(EWAS) related mQTLs are enriched for low p-values in FEV1 GWAS
+4. Test if DNAm - FEV1 MR analyses support causal influence of DNAm on FEV1
+5. Colocalisation to follow up MR results
+
+
+## 1. Gather and organise data
+
+We will perform MR analysis of DNAm on FEV1. The FEV1 GWAS used will be:
+
+```{r}
+gwasinfo("ieu-b-4760") %>% str()
+```
+
+The mQTL results will be obtained from the GoDMC summary data which is available at https://github.com/MRCIEU/godmc_phase2_analysis.
+
+Get GoDMC mQTLs
+
+```{r}
+load(url("https://github.com/MRCIEU/godmc_phase2_analysis/raw/master/results/16/16_clumped.rdata"))
+clumped <- ungroup(clumped)
+```
+
+Pull in rsids
+
+```{r}
+clumped <- read_parquet("snp_1kg.parquet", as_data_frame=FALSE) %>%
+  filter(code %in% clumped$snp) %>%
+  select(code, rsid) %>%
+  collect() %>%
+  left_join(clumped, ., by=c("snp"="code"))
+clumped
+```
+
+
+Format clumped data for MR analysis
+
+```{r}
+exposure_dat <- clumped %>%
+  ungroup() %>%
+  {TwoSampleMR::format_data(
+    dat=.,
+    snp_col="rsid", 
+    phenotype_col="cpg",
+    beta_col="Effect",
+    se_col="StdErr",
+    effect_allele_col="Allele1",
+    other_allele_col="Allele2",
+    pval_col="pval",
+    samplesize_col="TotalSampleSize",
+    chr_col="snpchr",
+    pos_col="snppos"
+  )}
+str(exposure_dat)
+```
+
+Of `r nrow(ewas_result)` DNAm sites, `r length(unique(exposure_dat$exposure))` have at least one mQTL detected in whole blood from the GoDMC meta analysis results. This is the distribution of number of independent mQTLs per DNAm site
+
+```{r}
+exposure_dat %>%
+  group_by(exposure) %>%
+  summarise(n_mqtl=n()) %>%
+  group_by(n_mqtl) %>%
+  summarise(count=n())
+```
+
+Extract mQTL variants from number of children GWASs
+
+```{r}
+outcome_dat <- extract_outcome_data(unique(exposure_dat$SNP), c("ieu-b-4760"))
+str(outcome_dat)
+```
+
+Harmonise exposure and outcome data
+
+```{r}
+dat <- harmonise_data(exposure_dat, outcome_dat, action=1) %>% suppressMessages()
+```
+
+## 2. Perform basic MR analysis of each DNAm site on FEV1
+
+```{r}
+res <- mr(dat, method_list=c("mr_ivw", "mr_wald_ratio")) %>% suppressMessages
+save(res, dat, ewas_result, file="results/mr_output.rdata")
+```
+
+Quick look at the MR results:
+
+```{r}
+res <- inner_join(
+  res, 
+  clumped %>% select(cpg, cpgchr, cpgpos) %>% filter(!duplicated(cpg)), by=c("exposure"="cpg")) %>% 
+  mutate(cpgchr = as.numeric(gsub("chr", "", cpgchr)), fdr=p.adjust(pval, "fdr"))
+```
+
+```{r}
+ggplot(res %>% filter(method %in% c("Inverse variance weighted", "Wald ratio")), aes(x=cpgpos, y=b)) +
+  geom_point(aes(colour=fdr < 0.05, shape=method)) +
+  facet_grid(. ~ cpgchr, scale="free_x", space="free_x") +
+  theme(axis.text.x=element_blank(), axis.ticks.x=element_blank(), legend.position="bottom") +
+  labs(x="DNAm site location", y="MR estimate")
+ggsave("images/fig_mr_miami.pdf", width=10, height=5)
+```
+
+There are some associations here that are stronger than expected by chance e.g. what fraction of the MR results have an FDR < 0.05? (5% of these are expected to be false positives). And what fraction of MR results have a p-value < 0.05? (expect 0.05 under the null hypothesis of no associations)
+
+
+```{r}
+res %>%
+  group_by(outcome) %>%
+  summarise(
+    n=n(),
+    prop_fdr=sum(fdr < 0.05)/n(),
+    prop_nominal=sum(pval < 0.05)/n()
+  )
+```
+
+## 3. Test if FEV1(EWAS) related mQTLs are enriched for low p-values in lung function GWAS
+
+Is this number of significant mQTLs in lung function more than expected by chance (given that lung function is polygenic and that mQTLs are enriched for high LD, intermediate MAF etc)? Compare the test statistics of the lung function mQTLs against the rest of the mQTLs in GoDMC, adjusting for SNP variance and LD scores.
+
+```{r}
+mqtl_snps <- unique(clumped$rsid) %>% na.exclude()
+length(mqtl_snps)
+```
+
+Extract all mQTLs from FEV1
+
+```{r}
+mqtl_outcome <- extract_outcome_data(mqtl_snps, c("ebi-a-GCST007432", "ebi-a-GCST007431", "ebi-a-GCST007429"), proxies=FALSE)
+mqtl_outcome <- mqtl_outcome%>%
+  mutate(outcome = case_when(
+    id.outcome == "ebi-a-GCST007432" ~ "FEV1",
+    id.outcome == "ebi-a-GCST007431" ~ "FEV1/FVC",
+    id.outcome == "ebi-a-GCST007429" ~ "FVC",
+    TRUE ~ NA_character_
+  ))
+```
+
+What fraction of all GoDMC mQTLs associate with FEV1?
+
+```{r}
+prop.table(table(mqtl_fev1$pval.outcome < 0.05))
+```
+
+Compares to FEV1 mQTLs
+
+```{r}
+prop.table(table(mqtl_fev1$pval.outcome[mqtl_fev1$SNP %in% dat$SNP] < 0.05))
+```
+
+Hypothesis - lung function EWAS related mQTLs are more likely to relate to lung function GWAS than all other known mQTLs
+
+Obtain allele frequency and LD score info for the mQTLs
+
+```{r}
+afl2 <- afl2_rsid(mqtl_snps)
+```
+
+Perform the analysis of
+
+$$
+FEV1_{GWAS} \sim mQTL_{EWAS} + LDscore + Var(SNP)
+$$
+
+i.e. if we denote an $mQTL_{EWAS}$ to be for `DNAm sites associated with FEV1 in EWAS` vs `all other DNAm sites`, then does that predict lower GWAS p-values for FEV1?
+
+```{r}
+afl2$fev1 <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FEV1")$SNP)
+afl2$fvc <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FVC")$SNP)
+afl2$fev1fvc <- as.numeric(afl2$rsid %in% subset(outcome_dat, outcome=="FEV1/FVC")$SNP)
+table(afl2$fev1)
+table(afl2$fvc)
+table(afl2$fev1fvc)
+```
+```{r}
+mqtl_outcome$fval <- mqtl_outcome$beta.outcome^2 / mqtl_outcome$se.outcome^2
+enr_dat <- inner_join(
+  afl2,
+  mqtl_outcome %>% filter(outcome=="FEV1") %>% select(rsid=SNP, fval_fev1=fval),
+  by="rsid"
+)
+enr_dat <- inner_join(
+  enr_dat,
+  mqtl_outcome %>% filter(outcome=="FVC") %>% select(rsid=SNP, fval_fvc=fval),
+  by="rsid"
+)
+enr_dat <- inner_join(
+  enr_dat,
+  mqtl_outcome %>% filter(outcome=="FEV1/FVC") %>% select(rsid=SNP, fval_fev1fvc=fval),
+  by="rsid"
+)
+enr_dat$snpvar <- (1-enr_dat$AF.EUR) * enr_dat$AF.EUR
+str(enr_dat)
+```
+
+
+
+```{r}
+params <- expand.grid(
+  outcome=c("fev1", "fvc", "fev1fvc"),
+  incl6=c(TRUE,FALSE),
+  b=NA,
+  se=NA,
+  pval=NA
+)
+enr_dat_no6 <- subset(enr_dat, chrom != 6)
+model_res <- lapply(1:nrow(params), function(i)
+{
+  eq <- as.formula(paste0("fval_", params$outcome[i], " ~ ", params$outcome[i], " + L2.EUR + snpvar"))
+  if(params$incl6[i])
+  {
+    mod <- summary(lm(eq, data=enr_dat))$coef
+    newas <- sum(enr_dat[[params$outcome[i]]])
+    ntot <- nrow(enr_dat)
+  } else {
+    mod <- summary(lm(eq, data=enr_dat_no6))$coef  
+    newas <- sum(enr_dat_no6[[params$outcome[i]]])
+    ntot <- nrow(enr_dat_no6)
+  }
+  tibble(outcome=params$outcome[i], incl6=params$incl6[i], `EWAS mQTLs`=newas, `Total mQTLs`=ntot, b=mod[2,1], se=mod[2,2], pval=mod[2,4])
+}) %>% bind_rows()
+model_res
+```
+
+This indicates that mQTLs for FEV1 EWAS hits associate more strongly than all other mQTLs - i.e. the EWAS is picking up DNAm sites that capture some sort of FEV1 regulatory function.
+
+Also try binarising the FEV1 GWAS test statistic (i.e. is the test statistic for FEV1 GWAS p < 0.05)
+
+```{r}
+enr_dat$sig <- enr_dat$fval_fev1 > qf(0.05, 1, 300000, low=F)
+model2 <- summary(glm(sig ~ fev1 + L2.EUR + snpvar, enr_dat %>% filter(chrom != 6), family="binomial"))
+model2
+```
+
+Similar result - an mQTL for an FEV1 associated CpG is `r model2$coef[2,1] %>% exp() %>% round(., 2)` times more likely to associate with FEV1 than any other mQTL.
+
+## 4. Test if MR analyses support causal influence of DNAm on lung function
+
+The MR results indicate that the FEV1 EWAS is capturing DNAm sites that are genetically influenced by genetic factors that also influence FEV1. One model is that there is a causal path (vertical pleiotropy) 
+
+```
+G -> DNAm -> FEV1
+```
+
+Another model is horizontal pleiotropy
+
+```
+DNAm <- G -> FEV1
+```
+
+Under the vertical pleiotropy model, we would expect that the effect estimates of DNAm on FEV1 are consistent when estimated using different instruments for DNAm. Many of the DNAm sites do have multiple independent instruments, so we can try to perform this analysis.
+
+We will formulate the analysis by hypothesising that the IVW association for `DNAm -> FEV1` is substantially stronger when combined across all instruments, than if we use any one instrument alone
+
+```{r, message=FALSE}
+res2 <- mr_singlesnp(dat, all_method="mr_ivw")
+
+mcpg <- filter(res2, grepl("All", SNP))$exposure %>% unique
+
+comparison <- res2 %>% 
+  filter(exposure %in% mcpg) %>%
+  filter(!is.na(p)) %>%
+  group_by(exposure, outcome) %>%
+  do({
+    x <- .
+    t1 <- x %>% 
+      filter(!grepl("All", SNP)) %>%
+      {tibble(exposure=.$exposure[1], minpval=min(.$p), n=nrow(.))}
+    t2 <- x %>%
+      filter(grepl("All", SNP)) %>%
+      {tibble(exposure=.$exposure[1], ivwpval=.$p[1])}
+    inner_join(t1, t2, by="exposure")
+  })
+
+str(comparison)
+table(comparison$minpval > comparison$ivwpval, comparison$outcome)
+comparison[comparison$minpval > comparison$ivwpval, ]
+```
+```{r}
+group_by(comparison, outcome) %>%
+  summarise(prop=sum(minpval > ivwpval)/ n())
+```
+
+
+We find `r sum(comparison$minpval > comparison$ivwpval)` instances out of `r nrow(comparison)` in which the IVW association is stronger than the strongest Wald ratio. However, looking at the results these are very modest differences. To test if this is more than we'd expect by chance, shuffle the SNPs across DNAm sites and re-estimate the joint effects - is `r sum(comparison$minpval > comparison$ivwpval)` more than we'd expect by chance?
+
+```{r, message=FALSE}
+set.seed(12345)
+nshuf <- 10
+l <- list()
+comparison_shuffle <- lapply(1:nshuf, function(i)
+{
+  message(i)
+  shuffle <- sample(1:nrow(dat))
+  dat2 <- dat
+  dat2$exposure <- dat2$exposure[shuffle]
+  dat2$id.exposure <- dat2$id.exposure[shuffle]
+  res3 <- mr_singlesnp(dat2, all_method="mr_ivw")
+  mcpg <- filter(res3, grepl("All", SNP))$exposure %>% unique
+  
+  comparison_shuffle <- res3 %>% 
+    filter(exposure %in% mcpg) %>%
+    filter(!is.na(p)) %>%
+    group_by(exposure, outcome) %>%
+    do({
+      x <- .
+      t1 <- x %>% 
+        filter(!grepl("All", SNP)) %>%
+        {tibble(exposure=.$exposure[1], minpval=min(.$p), n=nrow(.))}
+      t2 <- x %>%
+        filter(grepl("All", SNP)) %>%
+        {tibble(exposure=.$exposure[1], ivwpval=.$p[1])}
+      inner_join(t1, t2, by="exposure")
+    })
+  mutate(comparison_shuffle, perm=i) %>% return()
+})
+comparison_shuffle <- bind_rows(comparison_shuffle)
+```
+
+```{r}
+bind_rows(comparison_shuffle, comparison) %>%
+  group_by(perm, outcome) %>%
+  summarise(enr=sum(minpval > ivwpval), count=n(), prop=enr/count) %>%
+  group_by(outcome) %>%
+  do({
+    x <- .
+    arrange(x, prop) %>% mutate(ord=1:n(), what=case_when(perm %in% 1:nshuf ~ "Random permutations", TRUE ~ "Real data"))
+  }) %>%
+  ggplot(., aes(x=ord, y=prop)) +
+    geom_point(aes(colour=what)) +
+    facet_grid(. ~ outcome) +
+    labs(y="Enrichment", colour=NULL, x=NULL) +
+    theme(axis.text.x=element_blank(), axis.ticks.x=element_blank())
+ggsave("fig_mr_enrichment.pdf")
+
+```
+
+Here we see that the rate of stronger associations due to combining across DNAm sites is no more than expected by chance under a model of no causality.
+
+## 5. Colocalisation
+
+The MR analysis doesn't necessarily support a causal role of DNAm on FEV1, however this analysis could be expanded by performing colocalisation of DNAm and FEV1 at the mQTLs that genetically associate with FEV1.
+
+Determine list of DNAm-SNP sets to perform coloc on
+
+```{r}
+tocoloc <- res2 %>%
+  filter(!grepl("All", SNP)) %>%
+  mutate(fdr = p.adjust(p, "fdr")) %>%
+  filter(fdr < 0.05)
+save(tocoloc, file="tocoloc.rdata")
+```
+
+Obtain regional mQTL genetic effects from GoDMC API
+
+```{r}
+o <- lapply(unique(tocoloc$exposure), function(cpg)
+  {
+    o <- POST("http://api.godmc.org.uk/v0.1/query", body = list(cpgs=cpg), encode = "json")
+    content(o) %>% lapply(., as_tibble) %>% bind_rows
+  })
+```
+
+Organise regional data
+
+```{r}
+cpgregions <- o %>% bind_rows() %>%
+  separate(name, into=c("snpchr", "snppos", "snptype"), sep=":") %>%
+  mutate(
+    snpchr=as.numeric(gsub("chr", "", snpchr)),
+    snppos=as.numeric(snppos)
+  )
+str(cpgregions)
+```
+
+Perform colocalisation for each DNAm-SNP set that associated with FEV1 GWAS
+
+```{r, message=FALSE, echo=FALSE}
+colocres <- lapply(1:nrow(tocoloc), function(i)
+{
+  CPG <- tocoloc$exposure[i]
+  RSID <- tocoloc$SNP[i]
+  a <- subset(cpgregions, cpg == CPG)
+  CHR <- subset(a, rsid == RSID)$snpchr
+  POS <- subset(a, rsid == RSID)$snppos
+  region <- paste0(CHR, ":", POS-100000, "-", POS+100000)
+  a <- subset(a, snpchr==CHR & snppos > (POS-100000) & snppos < (POS+100000))
+  if(nrow(a) < 10)
+  {
+    return(NULL)
+  }
+  out <- suppressMessages(extract_outcome_data(a$rsid, tocoloc$id.outcome[i]))
+  aexp <- format_data(a, snp_col="rsid", beta_col="beta_a1", se_col="se", effect_allele_col = "a1", other_allele_col = "a2", samplesize_col = "samplesize", phenotype_col = "cpg", eaf_col = "freq_a1")
+  colocdat <- suppressMessages(harmonise_data(aexp, out, action=1))
+  if(nrow(colocdat) < 10)
+  {
+    return(NULL)
+  }
+  d1 <- list(beta=colocdat$beta.exposure, varbeta=colocdat$se.exposure^2, type="quant", N=colocdat$samplesize.exposure, sdY=1, snp=colocdat$SNP, pvalues=colocdat$pval.exposure)
+  d2 <- list(beta=colocdat$beta.outcome, varbeta=colocdat$se.outcome^2, type="quant", N=colocdat$samplesize.outcome, sdY=1, snp=colocdat$SNP, pvalues=colocdat$pval.outcome)
+  maf <- colocdat$eaf.exposure
+  maf[maf > 0.5] <- 1 - maf[maf > 0.5]
+  sink("/dev/null")
+  cr <- suppressMessages(suppressWarnings(coloc.abf(d1, d2, MAF=maf)))
+  sink()
+  x <- tibble(rsid=RSID, cpg=CPG, chr=CHR, pos=POS, outcome=tocoloc$outcome[i], h4=cr$summary['PP.H4.abf'])
+  return(x)
+}) %>% bind_rows()
+```
+
+Distribution of P(H4)
+
+```{r}
+ggplot(colocres, aes(x=h4)) + geom_histogram() +
+  facet_grid(. ~ outcome) +
+  labs(x="Coloc P(H4)")
+ggsave("fig_coloc.pdf")
+```
+
+How many colocalise at p(h4) > 0.8?
+
+```{r}
+table(colocres$h4 > 0.8, colocres$outcome)
+```
+
+In regions of very long LD e.g. MHC region, colocalisation is difficult to interpret. This is because colocalisation aims to determine if two traits share a causal variant. However, if the region has extended LD then there will be a very large number of potential causal variants in high LD with each other, and it's possible that the causal variant for DNAm is different to the causal variant for FEV1 and this will not be detectable by coloc.
+
+```{r}
+table(colocres$h4 > 0.8, colocres$chr)
+```
+
+Here are the results that colocalise that are not on chromosome 6
+
+```{r}
+colocres %>%
+  filter(chr !=6 & h4 > 0.8)
+```
+
+```{r}
+save(colocres, file="colocres.rdata")
+```
+
+## Bringing it together
+
+1. Coloc
+2. MR evidence from multiple variants?
+
+
+```{r}
+colocmrres <- left_join(
+  tocoloc %>% select(outcome, exposure, SNP, b, se, pval=p),
+  # Remove MHC
+  colocres %>% filter(!(chr == 6 & pos > 25392021 & pos < 33392022)), 
+  by=c("SNP"="rsid", "exposure"="cpg", "outcome")) %>% select(outcome, exposure, SNP, chr, pos, everything()) %>% arrange(outcome, desc(h4)) %>% mutate(h4=round(h4, 2))
+dim(colocmrres)
+colocmrres
+```
+
+Do any of the colocalising signals also have another variant?
+
+```{r}
+temp <- subset(colocmrres, h4 >= 0.8)
+dat_coloc <- subset(dat, paste(outcome, exposure) %in% paste(temp$outcome, temp$exposure))
+mr_coloc <- mr(dat_coloc) %>% suppressMessages()
+het_coloc <- mr_heterogeneity(dat_coloc, method_list="mr_ivw") %>% suppressMessages()
+```
+
+```{r}
+mr_coloc_ss <- mr_singlesnp(dat_coloc %>% filter(paste(exposure, outcome) %in% paste(het_coloc$exposure, het_coloc$outcome)), all_method = "mr_ivw")
+mr_coloc_ss <- left_join(mr_coloc_ss, colocres, by=c("SNP"="rsid", "exposure"="cpg", "outcome")) %>%
+  mutate(coloc_sig = h4 >= 0.8)
+
+ggplot(subset(mr_coloc_ss), aes(x=b, y=SNP)) +
+  geom_vline(xintercept=0, linetype="dotted") +
+  geom_point(aes(colour=grepl("All", SNP))) +
+  geom_point(data=subset(mr_coloc_ss, coloc_sig), colour="black", size=2) +
+  geom_errorbarh(aes(xmin=b-1.96*se, xmax=b+1.96*se, colour=grepl("All", SNP)), height=0) +
+  facet_grid(paste(outcome, " ~ ", exposure) ~ ., scale="free_y", space="free_y") +
+  labs(y=NULL, x="MR estimate") +
+  theme(legend.position="none", strip.text.y=element_text(angle=0))
+ggsave("fig_coloc_mr.pdf", height=8, width=7)
+```
+
+## Tables
+
+MR and coloc results
+
+```{r}
+write.csv(colocmrres, "tab_colocmrres.csv")
+```
+
+mQTL enrichment results
+
+```{r}
+write.csv(model_res, "tab_mqtl_enrichment.csv")
+```
+
+Multiple instrument MR and heterogeneity
+
+```{r}
+inner_join(res, het_coloc, by=c("exposure", "outcome")) %>%
+  select(exposure, outcome, nsnp, b, se, pval, Q, Q_pval) %>%
+  arrange(outcome) %>%
+  write.csv(., "tab_mr_het.csv")
+```
+
+
+
